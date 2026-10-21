@@ -1,5 +1,6 @@
 export const runtime = 'edge';
 import { getRequestContext } from '@cloudflare/next-on-pages';
+import { ensureD1Indexes } from '@/lib/d1';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -40,8 +41,6 @@ export async function OPTIONS(request) {
   });
 }
 
-// 判断Referer是否允许
-
 
 export async function GET(request, { params }) {
   const { name } = params
@@ -63,33 +62,29 @@ export async function GET(request, { params }) {
   const ip = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || request.socket.remoteAddress;
   const clientIp = ip ? ip.split(',')[0].trim() : 'IP not found';
   const Referer = request.headers.get('Referer') || "Referer";
+  const isAdminReferer = (Referer === `${req_url.origin}/admin` || Referer === `${req_url.origin}/list` || Referer === `${req_url.origin}/`);
 
   const cacheKey = new Request(req_url.toString(), request);
   const cache = caches.default;
 
-  let rating
-
-  try {
-    rating = await getRating(env.IMG, `/cfile/${name}`);
-    if (rating === 3 && !(Referer === `${req_url.origin}/admin` || Referer === `${req_url.origin}/list` || Referer === `${req_url.origin}/`)) {
-      await logRequest(env, name, Referer, clientIp);
-      return Response.redirect(`${req_url.origin}/img/blocked.png`, 302);
-    }
-
-  } catch (error) {
-    console.log(error);
-
-  }
-  // 检查缓存
+  // 1. 优先检查边缘缓存：命中缓存直接返回，不消耗 D1 读取和写入配额
   let cachedResponse = await cache.match(cacheKey);
   if (cachedResponse) {
-    if (!(Referer === `${req_url.origin}/admin` || Referer === `${req_url.origin}/list` || Referer === `${req_url.origin}/`)) {
-      await logRequest(env, name, Referer, clientIp);
-    }
-    // 如果缓存中存在，直接返回缓存响应
-    return cachedResponse
+    return cachedResponse;
   }
 
+  // 2. 缓存未命中时再查询 D1 鉴黄状态（使用索引查询，仅扫描 1 行）
+  try {
+    if (env.IMG) {
+      await ensureD1Indexes(env.IMG);
+      const rating = await getRating(env.IMG, `/cfile/${name}`);
+      if (rating === 3 && !isAdminReferer) {
+        return Response.redirect(`${req_url.origin}/img/blocked.png`, 302);
+      }
+    }
+  } catch (error) {
+    console.log(error);
+  }
 
   try {
     const file_path = await getFile_path(env, name);
@@ -98,14 +93,12 @@ export async function GET(request, { params }) {
     if (file_path === "error") {
       return Response.json({
         status: 500,
-        message: ` ${error.message}`,
+        message: `File not found`,
         success: false
-      }
-        , {
-          status: 500,
-          headers: corsHeaders,
-        })
-
+      }, {
+        status: 500,
+        headers: corsHeaders,
+      })
     } else {
       const res = await fetch(`https://api.telegram.org/file/bot${env.TG_BOT_TOKEN}/${file_path}`, {
         method: request.method,
@@ -116,13 +109,12 @@ export async function GET(request, { params }) {
       if (res.ok) {
         const fileBuffer = await res.arrayBuffer();
 
-
-
         const contentType = getContentType(fileName);
         const responseHeaders = {
           "Content-Disposition": `attachment; filename=${fileName}`,
           "Access-Control-Allow-Origin": "*",
-          "Content-Type": contentType
+          "Content-Type": contentType,
+          "Cache-Control": "public, max-age=86400"
         };
         const response_img = new Response(fileBuffer, {
           headers: responseHeaders
@@ -130,27 +122,19 @@ export async function GET(request, { params }) {
 
         ctx.waitUntil(cache.put(cacheKey, response_img.clone()));
 
-        if (Referer === `${req_url.origin}/admin` || Referer === `${req_url.origin}/list` || Referer === `${req_url.origin}/`) {
-          return response_img;
-
-        } else if (!env.IMG) {
-          return response_img
-
-        } else {
-          await logRequest(env, name, Referer, clientIp);
-          return response_img
-
+        if (!isAdminReferer && env.IMG) {
+          ctx.waitUntil(logRequest(env, name));
         }
+        return response_img;
       } else {
         return Response.json({
           status: 500,
-          message: ` ${error.message}`,
+          message: `Failed to fetch file from Telegram`,
           success: false
-        }
-          , {
-            status: 500,
-            headers: corsHeaders,
-          })
+        }, {
+          status: 500,
+          headers: corsHeaders,
+        })
       }
     }
   } catch (error) {
@@ -158,17 +142,12 @@ export async function GET(request, { params }) {
       status: 500,
       message: ` ${error.message}`,
       success: false
-    }
-      , {
-        status: 500,
-        headers: corsHeaders,
-      })
+    }, {
+      status: 500,
+      headers: corsHeaders,
+    })
   }
-
-
 }
-
-
 
 
 async function getFile_path(env, file_id) {
@@ -191,59 +170,24 @@ async function getFile_path(env, file_id) {
     }
   } catch (error) {
     return "error";
-
   }
-
-
 }
 
 
-
-// 插入 tgimglog 记录
-async function insertTgImgLog(DB, url, referer, ip, time) {
-  const iImglog = await DB.prepare('INSERT INTO tgimglog (url, referer, ip, time) VALUES (?, ?, ?, ?)')
-    .bind(url, referer, ip, time)
-    .run();
-}
-
-
-
-// 从数据库获取鉴黄信息
+// 从数据库获取鉴黄信息（走 idx_imginfo_url 索引）
 async function getRating(DB, url) {
-  const ps = DB.prepare(`SELECT rating FROM imginfo WHERE url='${url}'`);
+  const ps = DB.prepare('SELECT rating FROM imginfo WHERE url = ?').bind(url);
   const result = await ps.first();
   return result ? result.rating : null;
 }
 
 
-
-
-
-async function get_nowTime() {
-  const options = {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    hour12: false,
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
-  };
-  const timedata = new Date();
-  const formattedDate = new Intl.DateTimeFormat('zh-CN', options).format(timedata);
-
-  return formattedDate
-
-}
-
-
-// 异步日志记录
-async function logRequest(env, name, referer, ip) {
+// 异步更新访问计数（仅在缓存未命中时更新，不再向 tgimglog 无限写入流水）
+async function logRequest(env, name) {
   try {
-    const nowTime = await get_nowTime()
-    await insertTgImgLog(env.IMG, `/cfile/${name}`, referer, ip, nowTime);
-    const setData = await env.IMG.prepare(`UPDATE imginfo SET total = total +1 WHERE url = '/rfile/${name}';`).run()
+    await env.IMG.prepare('UPDATE imginfo SET total = total + 1 WHERE url = ?')
+      .bind(`/cfile/${name}`)
+      .run();
   } catch (error) {
     console.error('Error logging request:', error);
   }

@@ -1,7 +1,5 @@
-
 import { getRequestContext } from '@cloudflare/next-on-pages';
-
-// ...
+import { ensureD1Indexes } from '@/lib/d1';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -11,17 +9,22 @@ const corsHeaders = {
 };
 
 export const runtime = 'edge';
+
 export async function POST(request) {
-  // 获取客户端的IP地址
-  const { env, cf, ctx } = getRequestContext();
-  // console.log(dd);
+  const { env } = getRequestContext();
   try {
-    let { page, query } = await request.json()
+    await ensureD1Indexes(env.IMG);
+    let { page, query } = await request.json();
+    const offset = (Number(page) || 0) * 10;
 
     if (query) {
-      const ps = env.IMG.prepare(`SELECT * FROM imginfo WHERE url LIKE '%${query}%' LIMIT 10 OFFSET ${page} * 10`);
-      const { results } = await ps.all()
-      const total = await env.IMG.prepare(`SELECT COUNT(*) as total FROM imginfo WHERE url LIKE '%${query}%'`).first()
+      const likeQuery = `%${query}%`;
+      const ps = env.IMG.prepare('SELECT * FROM imginfo WHERE url LIKE ? ORDER BY id DESC LIMIT 10 OFFSET ?')
+        .bind(likeQuery, offset);
+      const { results } = await ps.all();
+      const total = await env.IMG.prepare('SELECT COUNT(*) as total FROM imginfo WHERE url LIKE ?')
+        .bind(likeQuery)
+        .first();
       return Response.json({
         "code": 200,
         "success": true,
@@ -31,9 +34,10 @@ export async function POST(request) {
         "total": total.total
       });
     } else {
-      const ps = env.IMG.prepare(`SELECT * FROM imginfo ORDER BY id DESC LIMIT 10 OFFSET ${page} * 10`);
-      const { results } = await ps.all()
-      const total = await env.IMG.prepare(`SELECT COUNT(*) as total FROM imginfo`).first()
+      const ps = env.IMG.prepare('SELECT * FROM imginfo ORDER BY id DESC LIMIT 10 OFFSET ?')
+        .bind(offset);
+      const { results } = await ps.all();
+      const total = await env.IMG.prepare('SELECT COUNT(*) as total FROM imginfo').first();
       return Response.json({
         "code": 200,
         "success": true,
@@ -43,22 +47,15 @@ export async function POST(request) {
         "total": total.total
       });
     }
-
-
   } catch (error) {
-
     return Response.json({
       "code": 500,
       "success": false,
       "message": error.message,
-      "data": page,
+      "data": null,
     }, {
       status: 500,
       headers: corsHeaders,
-    })
+    });
   }
-
 }
-
-
-

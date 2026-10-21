@@ -1,7 +1,6 @@
 export const runtime = 'edge';
 import { getRequestContext } from '@cloudflare/next-on-pages';
-
-
+import { ensureD1Indexes } from '@/lib/d1';
 
 const corsHeaders = {
 	'Access-Control-Allow-Origin': '*',
@@ -47,7 +46,6 @@ export async function POST(request) {
 		? fileTypeMap[Object.keys(fileTypeMap).find(key => fileType.startsWith(key))]
 		: defaultType;
 
-
 	const up_url = `https://api.telegram.org/bot${env.TG_BOT_TOKEN}/${endpoint}`;
 	let newformData = new FormData();
 	newformData.append("chat_id", env.TG_CHAT_ID);
@@ -61,7 +59,6 @@ export async function POST(request) {
 			},
 			body: newformData,
 		});
-
 
 		let responseData = await res_img.json();
 		const fileData = await getFile(responseData);
@@ -81,9 +78,10 @@ export async function POST(request) {
 				headers: corsHeaders,
 			})
 		} else {
+			const nowTime = await get_nowTime();
 			try {
+				await ensureD1Indexes(env.IMG);
 				const rating_index = await getRating(env, `${fileData.file_id}`);
-				const nowTime = await get_nowTime()
 				await insertImageData(env.IMG, `/cfile/${fileData.file_id}`, Referer, clientIp, rating_index, nowTime);
 
 				return Response.json({
@@ -97,29 +95,19 @@ export async function POST(request) {
 					status: 200,
 					headers: corsHeaders,
 				})
-
-
-
-
 			} catch (error) {
 				console.log(error);
 				await insertImageData(env.IMG, `/cfile/${fileData.file_id}`, Referer, clientIp, -1, nowTime);
 
-
 				return Response.json({
+					...data,
 					"msg": error.message
 				}, {
-					status: 500,
+					status: 200,
 					headers: corsHeaders,
 				})
 			}
 		}
-
-
-
-
-
-
 	} catch (error) {
 		return Response.json({
 			status: 500,
@@ -130,7 +118,6 @@ export async function POST(request) {
 			headers: corsHeaders,
 		})
 	}
-
 }
 
 async function getFile_path(env, file_id) {
@@ -153,7 +140,6 @@ async function getFile_path(env, file_id) {
 		}
 	} catch (error) {
 		return "error";
-
 	}
 }
 
@@ -190,20 +176,14 @@ const getFile = async (response) => {
 	}
 };
 
-
-
-async function insertImageData(env, src, referer, ip, rating, time) {
+async function insertImageData(DB, src, referer, ip, rating, time) {
 	try {
-		const instdata = await env.prepare(
-			`INSERT INTO imginfo (url, referer, ip, rating, total, time)
-           VALUES ('${src}', '${referer}', '${ip}', ${rating}, 1, '${time}')`
-		).run()
+		await DB.prepare(
+			'INSERT INTO imginfo (url, referer, ip, rating, total, time) VALUES (?, ?, ?, ?, 1, ?)'
+		).bind(src, referer, ip, rating, time).run();
 	} catch (error) {
-
-	};
+	}
 }
-
-
 
 async function get_nowTime() {
 	const options = {
@@ -218,34 +198,24 @@ async function get_nowTime() {
 	};
 	const timedata = new Date();
 	const formattedDate = new Intl.DateTimeFormat('zh-CN', options).format(timedata);
-
 	return formattedDate
-
 }
 
-
-
 async function getRating(env, url) {
-
 	try {
 		const file_path = await getFile_path(env, url);
-
 		const apikey = env.ModerateContentApiKey
 		const ModerateContentUrl = apikey ? `https://api.moderatecontent.com/moderate/?key=${apikey}&` : ""
-
 		const ratingApi = env.RATINGAPI ? `${env.RATINGAPI}?` : ModerateContentUrl;
 
 		if (ratingApi) {
 			const res = await fetch(`${ratingApi}url=https://api.telegram.org/file/bot${env.TG_BOT_TOKEN}/${file_path}`);
 			const data = await res.json();
 			const rating_index = data.hasOwnProperty('rating_index') ? data.rating_index : -1;
-
 			return rating_index;
 		} else {
 			return 0
 		}
-
-
 	} catch (error) {
 		return -1
 	}

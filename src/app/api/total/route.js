@@ -1,8 +1,5 @@
-import { NextResponse } from "next/server";
-import { headers } from 'next/headers'
 import { getRequestContext } from '@cloudflare/next-on-pages';
-
-// ...
+import { ensureD1Indexes } from '@/lib/d1';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -13,24 +10,19 @@ const corsHeaders = {
 
 export const runtime = 'edge';
 export async function GET(request) {
-  // 获取客户端的IP地址
-  const { env, cf, ctx } = getRequestContext();
-  // console.log(dd);
-  let totalImg = {
-    status: 404,
-    total: "?"
-  }
+  const { env } = getRequestContext();
 
   try {
     if (env.IMG) {
-      const total = await env.IMG.prepare(`SELECT COUNT(*) as total FROM imginfo`).first()
+      await ensureD1Indexes(env.IMG);
+      const total = await env.IMG.prepare('SELECT COUNT(*) as total FROM imginfo').first();
       return Response.json({
         "code": 200,
         "success": true,
         "message": "success",
         "total": total.total
       });
-    }else{
+    } else {
       return Response.json({
         "code": 500,
         "success": true,
@@ -39,30 +31,17 @@ export async function GET(request) {
       }, {
         status: 500,
         headers: corsHeaders,
-      })
+      });
     }
   } catch (error) {
     return Response.json({
       "code": 500,
       "success": false,
       "message": error.message,
+      "total": "?"
     }, {
       status: 500,
       headers: corsHeaders,
-    })
-  }
-
-}
-
-
-
-async function insertImageData(env, src, referer, ip, rating, time) {
-  try {
-    const instdata = await env.prepare(
-      `INSERT INTO imginfo (url, referer, ip, rating, total, time)
-           VALUES ('${src}', '${referer}', '${ip}', ${rating}, 1, '${time}')`
-    ).run();
-  } catch (error) {
-
+    });
   }
 }
