@@ -3,11 +3,11 @@ import { signIn } from "next-auth/react";
 import { useState } from "react";
 import { ToastContainer } from "react-toastify";
 import { toast } from "react-toastify";
-// import { useRouter } from 'next/navigation'
+
 export function LoginPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  // const router = useRouter()
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
@@ -16,19 +16,27 @@ export function LoginPage() {
         username,
         password,
       });
-      // console.log(result);
       if (result?.error) {
         console.log(result.error);
-        toast.error("用户名或密码错误，请核对后在登陆！")
+        toast.error("用户名或密码错误，请核对后再登录！");
       } else {
-        // 成功处理，比如重定向到一个受保护的页面
-        // router.push("/admin")
         console.log('Login successful!');
-        toast.success('登录成功，自动跳转到对应页面!')
-        // toast.error('Login successful!')
-        setTimeout(() => {
-          window.location.reload(); // 延迟3秒后刷新页面
-        }, 1000);
+        toast.success('登录成功，正在跳转...');
+        try {
+          const authRes = await fetch('/api/enableauthapi/isauth', { method: 'POST' });
+          const authData = await authRes.json();
+          setTimeout(() => {
+            if (authData?.role === 'admin') {
+              window.location.href = '/admin';
+            } else {
+              window.location.href = '/';
+            }
+          }, 500);
+        } catch (err) {
+          setTimeout(() => {
+            window.location.href = '/admin';
+          }, 500);
+        }
       }
     } catch (error) {
       console.log('Error during sign in:', error);

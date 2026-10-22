@@ -61,8 +61,7 @@ export default function Home() {
   const ip = async () => {
     try {
 
-      const res = await fetch(`/api/ip`, {
-        method: "GET",
+      const res = await fetch(`/api/ip`, { method: "POST",
         headers: {
           'Content-Type': 'application/json'
         }
@@ -80,8 +79,7 @@ export default function Home() {
   const isAuth = async () => {
     try {
 
-      const res = await fetch(`/api/enableauthapi/isauth`, {
-        method: "GET",
+      const res = await fetch(`/api/enableauthapi/isauth`, { method: "POST",
         headers: {
           'Content-Type': 'application/json'
         }
@@ -108,8 +106,7 @@ export default function Home() {
   const getTotal = async () => {
     try {
 
-      const res = await fetch(`/api/total`, {
-        method: "GET",
+      const res = await fetch(`/api/total`, { method: "POST",
         headers: {
           'Content-Type': 'application/json'
         }
